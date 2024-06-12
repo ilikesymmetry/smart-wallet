@@ -17,11 +17,18 @@ contract SessionManager {
     /// @notice A time-bound provision of scoped account control to another signer.
     struct Session {
         uint256 chainId; // 0 represents chain-agnostic i.e. this session applies on any network
+        address verifyingContract; // prevent replay on other potential SessionManager implementations, potentially switch to 712, but lazy for this POC
         bytes signer;
         bytes scopes; // TODO: account needs to check this with UserOp and diff before/after execution
         uint40 expiresAt;
         bytes approval;
     }
+
+    /// @notice Session chain is not agnositc and not this chain.
+    error SessionChainInvalid();
+
+    /// @notice Session verifying contract is not this SessionManager.
+    error SessionVerifyingContractInvalid();
 
     /// @notice Session is revoked.
     error SessionRevoked();
@@ -57,6 +64,10 @@ contract SessionManager {
         (Session memory session, bytes memory signature) = abi.decode(authData, (Session, bytes));
 
         bytes32 sessionId = keccak256(abi.encode(session));
+        // check chainId is agnostic or this chain
+        if (session.chainId != 0 && session.chainId != block.chainid) revert SessionChainInvalid();
+        // check verifyingContract is SessionManager
+        if (session.verifyingContract != address(this)) revert SessionVerifyingContractInvalid();
         // check session not expired
         if (session.expiresAt < block.timestamp) revert SessionExpired();
         // check session not revoked
