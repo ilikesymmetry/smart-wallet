@@ -16,19 +16,24 @@ import {SignatureChecker} from "./utils/SignatureChecker.sol";
 contract SessionManager {
     /// @notice A time-bound provision of scoped account control to another signer.
     struct Session {
-        uint256 chainId; // 0 represents chain-agnostic i.e. this session applies on any network
-        address verifyingContract; // prevent replay on other potential SessionManager implementations, potentially switch to 712, but lazy for this POC
+        address account;
+        bytes approval;
         bytes signer;
         bytes scopes; // TODO: account needs to check this with UserOp and diff before/after execution
         uint40 expiresAt;
-        bytes approval;
+        // TODO: consider EIP-712 format instead
+        uint256 chainId; // 0 represents chain-agnostic i.e. this session applies on any network
+        address verifyingContract; // prevent replay on other potential SessionManager implementations
     }
 
+    /// @notice Session account does not match currently authentication sender.
+    error InvalidSessionAccount();
+
     /// @notice Session chain is not agnositc and not this chain.
-    error SessionChainInvalid();
+    error InvalidSessionChain();
 
     /// @notice Session verifying contract is not this SessionManager.
-    error SessionVerifyingContractInvalid();
+    error InvalidSessionVerifyingContract();
 
     /// @notice Session is revoked.
     error SessionRevoked();
@@ -37,7 +42,7 @@ contract SessionManager {
     error SessionExpired();
     
     /// @notice SessionApproval is invalid
-    error SessionApprovalInvalid();
+    error InvalidSessionApproval();
 
     /// @notice Signature from session signer does not match hash.
     error InvalidSignature();
@@ -58,22 +63,22 @@ contract SessionManager {
     /// @param hash Arbitrary data to sign over.
     /// @param authData Combination of an approved Session and a signature from the session's signer for `hash`.
     function isValidSignature(bytes32 hash, bytes calldata authData) external view returns (bytes4 result) {
-        // assume called by 4337 account
-        address account = msg.sender;
         // assume session and signature encoded together
         (Session memory session, bytes memory signature) = abi.decode(authData, (Session, bytes));
-
         bytes32 sessionId = keccak256(abi.encode(session));
+        
+        // check sender is session account
+        if (msg.sender != session.account) revert InvalidSessionAccount();
         // check chainId is agnostic or this chain
-        if (session.chainId != 0 && session.chainId != block.chainid) revert SessionChainInvalid();
+        if (session.chainId != 0 && session.chainId != block.chainid) revert InvalidSessionChain();
         // check verifyingContract is SessionManager
-        if (session.verifyingContract != address(this)) revert SessionVerifyingContractInvalid();
+        if (session.verifyingContract != address(this)) revert InvalidSessionVerifyingContract();
         // check session not expired
         if (session.expiresAt < block.timestamp) revert SessionExpired();
         // check session not revoked
-        if (_revokedSessions[account][sessionId]) revert SessionRevoked();
+        if (_revokedSessions[session.account][sessionId]) revert SessionRevoked();
         // check session account approval
-        if (!ERC1271(account).isValidSignature(sessionId, approval)) revert SessionApprovalInvalid();
+        if (!ERC1271(session.account).isValidSignature(sessionId, approval)) revert InvalidSessionApproval();
         // check session signer's signature on hash
         if (!SignatureChecker.isValidSignatureNow(hash, signature, session.signer)) revert InvalidSignature();
 
