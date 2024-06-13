@@ -13,7 +13,7 @@ import {SignatureChecker} from "./utils/SignatureChecker.sol";
 ///      Account implementations MUST validate scopes within their execution flow outside of validateUserOp.
 ///
 /// @author Coinbase (https://github.com/coinbase/smart-wallet)
-contract SessionManager {
+abstract contract SessionManager {
     /// @notice A time-bound provision of scoped account control to another signer.
     struct Session {
         address account;
@@ -62,11 +62,18 @@ contract SessionManager {
     ///
     /// @param hash Arbitrary data to sign over.
     /// @param authData Combination of an approved Session and a signature from the session's signer for `hash`.
-    function isValidSignature(bytes32 hash, bytes calldata authData) external view returns (bytes4 result) {
+    function isValidSignature(bytes32 hash, bytes calldata authData) external view virtual returns (bytes4 result) {
         // assume session and signature encoded together
         (Session memory session, bytes memory signature) = abi.decode(authData, (Session, bytes));
-        bytes32 sessionId = keccak256(abi.encode(session));
         
+        _validateSessionSignature(session, hash, signature);
+
+        return 0x1626ba7e;
+    }
+
+    function _validateSessionSignature(Session memory session, bytes32 hash, bytes memory signature) internal view {
+        bytes32 sessionId = keccak256(abi.encode(session));
+
         // check sender is session account
         if (msg.sender != session.account) revert InvalidSessionAccount();
         // check chainId is agnostic or this chain
@@ -81,8 +88,6 @@ contract SessionManager {
         if (!ERC1271(session.account).isValidSignature(sessionId, approval)) revert InvalidSessionApproval();
         // check session signer's signature on hash
         if (!SignatureChecker.isValidSignatureNow(hash, signature, session.signer)) revert InvalidSignature();
-
-        return 0x1626ba7e;
     }
 
     /// @notice Revoke a session to prematurely expire it.
