@@ -11,7 +11,7 @@ import {SessionManager} from "./SessionManager.sol";
 /// @notice EIP-1271-compatible session key implementation that trusts an attestor for permissions defined offchain
 ///
 /// @author Coinbase (https://github.com/coinbase/smart-wallet)
-contract NativeAssetSessionManager is SessionManager {
+contract OffchainAttestationSessionManager is SessionManager {
     /// @notice Validates a session via EIP-1271.
     ///
     /// @dev assumes called by CoinbaseSmartWallet where this contract is an owner.

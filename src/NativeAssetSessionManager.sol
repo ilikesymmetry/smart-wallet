@@ -44,7 +44,9 @@ contract NativeAssetSessionManager is SessionManager {
         _validateSessionSignature(session, hash, signature);
 
         // validate native asset spending limits
-        uint256 spendingLimit = abi.decode(sesssion.scopes, (uint256));
+
+        // check userOp matches hash
+        if (UserOperationLib.hash(userOp) != hash) revert InvalidUserOperation();
         // check function is executeCalls (0x34fcd5be)
         if (userOp.callData[0:5] != 0x34fcd5be) revert InvalidFunctionSelector();
         (Calls[] memory calls) = abi.decode(userOp.callData[5:], (Call[]));
@@ -53,6 +55,7 @@ contract NativeAssetSessionManager is SessionManager {
             totalValue += calls[i].value;
         }
         // check totalValue under spendingLimit
+        uint256 spendingLimit = abi.decode(sesssion.scopes, (uint256));
         if (totalValue > spendingLimit) revert SpendingLimitExceeded();
 
         return 0x1626ba7e;
