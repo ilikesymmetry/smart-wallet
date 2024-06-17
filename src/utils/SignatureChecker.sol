@@ -53,6 +53,6 @@ library SignatureChecker {
             return WebAuthn.verify({challenge: abi.encode(hash), requireUV: false, webAuthnAuth: auth, x: x, y: y});
         }
 
-        revert InvalidsignerBytesLength(signerBytes);
+        revert InvalidSignerBytesLength(signerBytes);
     }
 }

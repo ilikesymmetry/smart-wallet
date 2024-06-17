@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IERC1271} from "openzeppelin-contracts/interfaces/IERC1271.sol";
+import {IERC1271} from "openzeppelin-contracts/contracts/interfaces/IERC1271.sol";
 
+import {IScopeVerifier} from "./scopes/IScopeVerifier.sol";
 import {SignatureChecker} from "./utils/SignatureChecker.sol";
 
 /// @title SessionManager
@@ -19,10 +20,11 @@ abstract contract SessionManager {
         address account;
         bytes approval;
         bytes signer;
-        bytes scopes; // TODO: account needs to check this with UserOp and diff before/after execution
+        address scopeVerifier;
+        bytes scopeData;
         uint40 expiresAt;
         // TODO: consider EIP-712 format instead
-        uint256 chainId; // 0 represents chain-agnostic i.e. this session applies on any network
+        uint256 chainId; // (to discuss) 0 could represent chain-agnostic i.e. this session applies on any network
         address verifyingContract; // prevent replay on other potential SessionManager implementations
     }
 
@@ -36,10 +38,10 @@ abstract contract SessionManager {
     error InvalidSessionVerifyingContract();
 
     /// @notice Session is revoked.
-    error SessionRevoked();
+    error RevokedSession();
     
     /// @notice Session has expired.
-    error SessionExpired();
+    error ExpiredSession();
     
     /// @notice SessionApproval is invalid
     error InvalidSessionApproval();
@@ -56,19 +58,25 @@ abstract contract SessionManager {
     /// @dev keying storage by account enables us to pass 4337 storage access limitations
     mapping(address account => mapping(bytes32 sessionId => bool revoked)) internal _revokedSessions;
 
+    bytes4 constant EIP1271_MAGIC_VALUE = 0x1626ba7e;
+
     /// @notice Validates a session via EIP-1271.
     ///
     /// @dev assumes called by CoinbaseSmartWallet where this contract is an owner.
+    /// @dev `view` mutability removed, breaking EIP-1271 standard, to support state writes in scopeVerifiers for accumulating spend
     ///
     /// @param hash Arbitrary data to sign over.
     /// @param authData Combination of an approved Session and a signature from the session's signer for `hash`.
-    function isValidSignature(bytes32 hash, bytes calldata authData) external view virtual returns (bytes4 result) {
-        // assume session and signature encoded together
-        (Session memory session, bytes memory signature) = abi.decode(authData, (Session, bytes));
-        
-        _validateSessionSignature(session, hash, signature);
+    function isValidSignature(bytes32 hash, bytes calldata authData) external returns (bytes4 result) {
+        // assume session, signature, attestation encoded together
+        (Session memory session, bytes memory signature, bytes memory scopeArgs) = abi.decode(authData, (Session, bytes, bytes));
 
-        return 0x1626ba7e;
+        // validate core session logic
+        _validateSessionSignature(session, hash, signature);
+        // validate scope-specific logic
+        IScopeVerifier(session.scopeVerifier).verifyScope(msg.sender, hash, keccak256(abi.encode(session)), session.scopeData, scopeArgs);
+
+        return EIP1271_MAGIC_VALUE;
     }
 
     function _validateSessionSignature(Session memory session, bytes32 hash, bytes memory signature) internal view {
@@ -81,11 +89,11 @@ abstract contract SessionManager {
         // check verifyingContract is SessionManager
         if (session.verifyingContract != address(this)) revert InvalidSessionVerifyingContract();
         // check session not expired
-        if (session.expiresAt < block.timestamp) revert SessionExpired();
+        if (session.expiresAt < block.timestamp) revert ExpiredSession();
         // check session not revoked
-        if (_revokedSessions[session.account][sessionId]) revert SessionRevoked();
+        if (_revokedSessions[session.account][sessionId]) revert RevokedSession();
         // check session account approval
-        if (!ERC1271(session.account).isValidSignature(sessionId, approval)) revert InvalidSessionApproval();
+        if (EIP1271_MAGIC_VALUE != IERC1271(session.account).isValidSignature(sessionId, session.approval)) revert InvalidSessionApproval();
         // check session signer's signature on hash
         if (!SignatureChecker.isValidSignatureNow(hash, signature, session.signer)) revert InvalidSignature();
     }
@@ -98,10 +106,12 @@ abstract contract SessionManager {
     function revokeSession(Session calldata session) external {
         bytes32 sessionId = keccak256(abi.encode(session));
         if (_revokedSessions[msg.sender][sessionId]) {
-            revert SessionRevoked();
+            revert RevokedSession();
         }
         _revokedSessions[msg.sender][sessionId] = true;
 
         emit SessionRevoked(msg.sender, sessionId);
     }
+
+    // TODO: add an `invokeSession` function to enable re-enabling revoked sessions?
 }
